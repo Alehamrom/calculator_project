@@ -1,26 +1,37 @@
-package handlers // Объявляем пакет handlers
+package handlers
 
 import (
-	"database/sql"  // Для работы с базой данных
-	"encoding/json" // Для работы с JSON (декодирование запроса)
-	// "fmt"           // Для форматирования ошибок
-	"log"      // Для логирования
-	"net/http" // Для работы с HTTP (ResponseWriter, Request, status codes)
-	"strings"  // Для проверки строк (в isUniqueConstraintError)
+	localParser "calculator_project/internal/parser"
+	// "context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
 
-	// Локальные импорты из других внутренних пакетов проекта.
-	// Используем алиасы, чтобы избежать конфликтов имен (особенно с net/http).
-	localAuth "calculator_project/internal/auth" // Импортируем пакет auth
-	localHTTP "calculator_project/internal/http" // Импортируем наши HTTP утилиты
-	// Need to import the Config struct definition from main? No, better to define it in a shared place like internal/config.
-	// Or pass only necessary parts of config to APIService. Passing the whole *main.Config is okay for now if we accept the dependency on the main package's struct.
-	// Let's define a minimal config struct needed by handlers within this package, or pass specific values from main.
-	// Passing the whole *main.Config is simplest initially, but creates a dependency cycle if handlers need to import main.
-	// A better pattern is a shared config struct in internal/config or passing primitive config values.
-	// Let's pass the relevant config values (like operation times, maybe JWT secrets) directly to NewAPIService or store them in APIService struct.
-	// For now, the handlers don't need config (except maybe JWT secret later), let's skip Config in APIService initially.
-	// The DB is the primary dependency for persistence and users.
+	"github.com/google/uuid"
+
+	localAuth "calculator_project/internal/auth"
+	localHTTP "calculator_project/internal/http"
+	localModels "calculator_project/internal/models"
+
+	"github.com/golang-jwt/jwt/v5"
+	// "github.com/gorilla/mux"
 )
+
+// Структуры для запросов и ответов API
+
+// Структура для тела запроса на вычисление выражения.
+type CalculateRequest struct {
+	Expression string `json:"expression"`
+}
+
+// Структура для тела ответа после создания выражения на вычисление.
+type CalculateResponse struct {
+	ID string `json:"id"` // ID созданного выражения
+}
 
 // RegisterRequest представляет структуру тела запроса для регистрации пользователя.
 type RegisterRequest struct {
@@ -28,126 +39,298 @@ type RegisterRequest struct {
 	Password string `json:"password"`
 }
 
-// APIService: Структура, которая будет содержать зависимости, необходимые обработчикам.
-// Например, соединение с базой данных.
+// Структура для тела запроса на вход пользователя.
+type LoginRequest struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+// Структура для тела ответа при успешном входе пользователя (содержит токен).
+type LoginResponse struct {
+	Token string `json:"token"`
+}
+
+// Структура сервиса с зависимостями и ее конструктор
+
 type APIService struct {
-	DB *sql.DB // Соединение с базой данных SQLite
-	// Здесь можно будет добавить другие зависимости, например, сервис для JWT, менеджер задач и т.д.
+	DB *sql.DB
+
+	// Конфигурация, необходимая обработчикам.
+	JWTSecret string // Секретный ключ для подписи JWT токенов
+	// Здесь можно будет добавить другие зависимости, например, менеджер задач и т.д.
 }
 
 // NewAPIService: Функция-конструктор для создания нового экземпляра APIService.
-// Принимает необходимые зависимости (например, *sql.DB) и возвращает указатель на APIService.
-func NewAPIService(db *sql.DB) *APIService {
-	return &APIService{DB: db}
+func NewAPIService(db *sql.DB, jwtSecret string) *APIService {
+	return &APIService{
+		DB:        db,
+		JWTSecret: jwtSecret, // Сохраняем секрет в структуре
+	}
 }
 
-// RegisterHandler: Обработчик HTTP-запросов на регистрацию пользователя (POST /api/v1/register).
-// Это метод структуры APIService, что дает ему доступ к полям APIService (например, к DB).
+// Реализация функций-обработчиков HTTP API
+
+// RegisterHandler: Обработчик HTTP-запросов на регистрацию пользователя.
 func (s *APIService) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Получен запрос на регистрацию пользователя")
-
-	// Убедимся, что тело запроса будет закрыто после прочтения.
 	defer r.Body.Close()
 
-	// 1. Парсим (декодируем) тело запроса из JSON в нашу структуру RegisterRequest.
 	var req RegisterRequest
-	// json.NewDecoder читает из io.Reader (r.Body) и декодирует в структуру.
 	err := json.NewDecoder(r.Body).Decode(&req)
-
 	if err != nil {
-		// Если тело запроса не является валидным JSON или не соответствует структуре RegisterRequest,
-		// возвращаем ошибку 400 Bad Request с сообщением.
 		log.Printf("Ошибка при декодировании тела запроса регистрации: %v", err)
-		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid request body format") // Используем нашу утилиту RespondError
-		return                                                                          // Завершаем выполнение обработчика
+		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid request body format")
+		return
 	}
 
-	// 2. Базовая валидация входных данных (проверяем, что логин и пароль не пустые).
 	if req.Login == "" || req.Password == "" {
 		log.Println("Запрос на регистрацию с пустым логином или паролем.")
 		localHTTP.RespondError(w, http.StatusBadRequest, "Login and password cannot be empty")
 		return
 	}
 
-	// TODO: Здесь можно добавить более сложные проверки валидности логина/пароля (минимальная длина, допустимые символы и т.д.).
-
-	// 3. Хешируем пароль перед сохранением в базу данных.
-	hashedPassword, err := localAuth.HashPassword(req.Password) // Используем функцию из нашего пакета auth
+	hashedPassword, err := localAuth.HashPassword(req.Password)
 	if err != nil {
-		// Если хеширование не удалось (крайне редкая внутренняя ошибка), возвращаем 500.
 		log.Printf("Ошибка при хешировании пароля для пользователя '%s': %v", req.Login, err)
 		localHTTP.RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
-	// 4. Сохраняем нового пользователя в базу данных.
-	// Подготовленный SQL-запрос для вставки данных. "?" - плейсхолдеры для значений.
 	insertUserSQL := `INSERT INTO users (login, password_hash) VALUES (?, ?)`
-	// Выполняем SQL-запрос на вставку, передавая логин и хешированный пароль в качестве аргументов.
-	// s.DB - это соединение с базой данных, доступное через структуру APIService.
 	_, err = s.DB.Exec(insertUserSQL, req.Login, hashedPassword)
 
 	if err != nil {
-		// 5. Обрабатываем ошибки при работе с базой данных.
-		// Проверяем, является ли ошибка нарушением уникального ограничения (логин уже существует).
-		if isUniqueConstraintError(err) { // Используем нашу вспомогательную функцию
+		if isUniqueConstraintError(err) {
 			log.Printf("Ошибка регистрации: Логин '%s' уже существует.", req.Login)
-			// Возвращаем статус 409 Conflict, если логин уже занят.
 			localHTTP.RespondError(w, http.StatusConflict, "Login already exists")
 			return
 		}
-		// Для любых других ошибок базы данных (например, проблема с соединением), возвращаем 500.
 		log.Printf("Ошибка при вставке пользователя '%s' в базу данных: %v", req.Login, err)
 		localHTTP.RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
-	// 6. Если все прошло успешно, отправляем ответ 200 OK.
 	log.Printf("Пользователь '%s' успешно зарегистрирован.", req.Login)
-	// Условие проекта требует "200+OK". Отправим пустой JSON объект {}.
-	localHTTP.RespondJSON(w, http.StatusOK, map[string]string{}) // Или можно было бы RespondJSON(w, http.StatusOK, nil), но пустой объект {"name":{}} может быть понятнее. Требование было {"name":"введенное_пользователем_имя"} для HelloHandler, для регистрации { } или пустота, судя по "200+OK". Отправим {}.
+	localHTTP.RespondJSON(w, http.StatusOK, map[string]string{})
 }
 
-// isUniqueConstraintError: Вспомогательная функция для проверки, является ли ошибка базы данных
-// ошибкой нарушения уникального ограничения (например, дублирование логина).
-// Реализация может зависеть от используемого драйвера СУБД.
+// LoginHandler: Обработчик HTTP-запросов на вход пользователя (POST /api/v1/login).
+func (s *APIService) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Получен запрос на вход пользователя")
+
+	defer r.Body.Close()
+
+	// 1. Парсим тело запроса.
+	var req LoginRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Printf("Ошибка при декодировании тела запроса входа: %v", err)
+		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid request body format")
+		return
+	}
+
+	// 2. Валидация входных данных.
+	if req.Login == "" || req.Password == "" {
+		log.Println("Запрос на вход с пустым логином или паролем.")
+		localHTTP.RespondError(w, http.StatusBadRequest, "Login and password cannot be empty")
+		return
+	}
+
+	// 3. Находим пользователя в базе данных по логину.
+	// Выбираем ID, логин и хеш пароля пользователя.
+	selectUserSQL := `SELECT id, login, password_hash FROM users WHERE login = ?`
+	var userID int64
+	var login string                // Читаем логин из БД
+	var hashedPasswordFromDB string // Сюда считаем хеш из БД
+
+	// QueryRow выполняет запрос, Scan считывает результат в переменные.
+	err = s.DB.QueryRow(selectUserSQL, req.Login).Scan(&userID, &login, &hashedPasswordFromDB)
+
+	if err != nil {
+		// Обрабатываем ошибку, если пользователь не найден.
+		if err == sql.ErrNoRows {
+			log.Printf("Попытка входа: Пользователь '%s' не найден.", req.Login)
+			// Возвращаем общую ошибку для неверных учетных данных (для безопасности).
+			localHTTP.RespondError(w, http.StatusUnauthorized, "Invalid login or password") // 401 Unauthorized
+			return
+		}
+		// Обрабатываем другие ошибки базы данных.
+		log.Printf("Ошибка при поиске пользователя '%s' в базе данных: %v", req.Login, err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Internal Server Error")
+		return
+	}
+
+	// 4. Проверяем пароль.
+	passwordMatch := localAuth.CheckPasswordHash(req.Password, hashedPasswordFromDB)
+
+	if !passwordMatch {
+		log.Printf("Попытка входа: Неверный пароль для пользователя '%s'.", req.Login)
+		// Возвращаем ту же общую ошибку (не сообщаем, что логин найден, но пароль неверный).
+		localHTTP.RespondError(w, http.StatusUnauthorized, "Invalid login or password") // 401 Unauthorized
+		return
+	}
+
+	// 5. Если логин и пароль верны, генерируем JWT токен.
+	expirationTime := time.Now().Add(24 * time.Hour) // Время жизни токена
+
+	// Создаем стандартные и кастомные claims (данные, которые будут храниться в токене).
+	claims := &localModels.CustomClaims{
+		UserID: userID, // Сохраняем ID пользователя в токене
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime), // Время истечения токена
+			IssuedAt:  jwt.NewNumericDate(time.Now()),     // Время выдачи токена
+			Subject:   fmt.Sprintf("%d", userID),          // "sub" - субъект, часто ID пользователя
+		},
+	}
+
+	// Создаем новый JWT токен с нашими claims и выбранным методом подписи (HS256).
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	// Подписываем токен нашим секретным ключом из структуры APIService.
+	tokenString, err := token.SignedString([]byte(s.JWTSecret)) // s.JWTSecret получаем из структуры
+
+	if err != nil {
+		// Если при подписи токена возникла ошибка (например, пустой секретный ключ), возвращаем 500.
+		log.Printf("Ошибка при генерации JWT токена для пользователя '%s': %v", req.Login, err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Internal Server Error")
+		return
+	}
+
+	// 6. Отправляем ответ с токеном.
+	log.Printf("Пользователь '%s' успешно вошел в систему. Выдан токен.", req.Login)
+	// Создаем структуру ответа и заполняем поле токеном.
+	responsePayload := LoginResponse{Token: tokenString}
+	// Отправляем успешный ответ 200 OK с JSON-телом, содержащим токен.
+	localHTTP.RespondJSON(w, http.StatusOK, responsePayload)
+}
+
+// isUniqueConstraintError: Вспомогательная функция для проверки уникального ограничения.
 func isUniqueConstraintError(err error) bool {
 	if err == nil {
-		return false // Нет ошибки - не нарушение ограничения
+		return false
 	}
-	// Для драйвера github.com/mattn/go-sqlite3, ошибки нарушения уникального ограничения
-	// часто содержат в тексте "UNIQUE constraint failed".
-	// Это простой, но рабочий способ проверки для SQLite.
-	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+	return strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "constraint failed")
 }
 
-// --- Заглушки для других обработчиков API ---
-// Добавляем пустые методы для других эндпоинтов /api/v1/, чтобы их можно было использовать в main.go
-// Эти методы будут реализованы позже.
-
-func (s *APIService) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализация входа пользователя и выдачи JWT
-	log.Println("Вызван LoginHandler (TODO)")
-	w.Write([]byte("Login endpoint (TODO)"))
-}
-
+// CalculateHandler: Обработчик HTTP-запросов на вычисление выражения.
+// Реализация логики парсинга нашим парсером и разбиения на задачи.
 func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализация приема выражения, парсинга, создания задач, сохранения в БД
-	log.Println("Вызван CalculateHandler (TODO)")
-	w.Write([]byte("Calculate endpoint (TODO)"))
+	log.Println("Получен запрос на вычисление выражения")
+
+	defer r.Body.Close()
+
+	userID := int64(1) // Временно для тестирования CalculateHandler без middleware
+
+	log.Printf("CalculateHandler: Запрос на вычисление выражения от пользователя с ID: %d", userID)
+
+	// Оригинальный блок получения UserID из контекста (закомментирован)
+	/*
+		userID, ok := r.Context().Value(localAuth.UserIDKey).(int64)
+		if !ok {
+			log.Println("CalculateHandler: UserID не найден в контексте запроса. Запрос не авторизован или проблема middleware.")
+			localHTTP.RespondError(w, http.StatusUnauthorized, "Unauthorized: User ID not found in context") // Или 500
+			return
+		}
+		log.Printf("CalculateHandler: Запрос на вычисление выражения от пользователя с ID: %d", userID)
+	*/
+
+	// 1. Парсим тело запроса.
+	var req CalculateRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Printf("Ошибка при декодировании тела запроса вычисления: %v", err)
+		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid request body format")
+		return
+	}
+
+	// 2. Валидация входных данных (проверяем, что строка выражения не пустая).
+	if req.Expression == "" {
+		log.Println("Запрос на вычисление с пустым выражением.")
+		localHTTP.RespondError(w, http.StatusBadRequest, "Expression cannot be empty")
+		return
+	}
+
+	log.Printf("Попытка парсинга выражения: %s", req.Expression)
+
+	// *** 3. Парсинг выражения нашим парсером и создание задач. ***
+	// Создаем новый экземпляр парсера
+	parserState := localParser.NewParser(req.Expression) // NewParser
+	// Парсим выражение в дерево узлов
+	rootNode, err := parserState.ParseExpression() // ParseExpression
+
+	if err != nil {
+		return
+	}
+
+	// Проверяем, что после парсинга не осталось необработанных символов
+	parserState.SkipSpaces()
+	if parserState.Pos < len(parserState.Input) {
+		log.Printf("Ошибка парсинга: необработанные символы '%s' в конце выражения", parserState.Input[parserState.Pos:])
+		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid expression format: unexpected characters at the end")
+		return
+	}
+
+	// Список для хранения сгенерированных задач
+	tasksToSave := []localParser.CalculationTask{}
+
+	// Обходим дерево узлов и формируем список задач
+	// Результат обхода корневого узла - это ID последней задачи (или число), представляющей результат всего выражения.
+	finalResultIDOrValue, err := localParser.NodeToTasks(rootNode, &tasksToSave)
+
+	if err != nil {
+		log.Printf("Ошибка при обходе дерева выражения и создании задач: %v", err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Internal error during task generation")
+		return
+	}
+
+	log.Printf("Выражение успешно спарсено и сформировано %d задач.", len(tasksToSave))
+	log.Printf("Конечный результат выражения представлен ID задачи или значением: %s", finalResultIDOrValue)
+
+	// 4. Генерируем уникальный ID для выражения.
+	expressionID := uuid.New().String() // Используем библиотеку uuid для генерации ID
+
+	// 5. Сохраняем выражение в базу данных.
+	insertExpressionSQL := `INSERT INTO expressions (id, user_id, expression_string, status, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+	expressionStatus := "Pending" // Начальный статус выражения.
+
+	_, err = s.DB.Exec(insertExpressionSQL, expressionID, userID, req.Expression, expressionStatus)
+	if err != nil {
+		log.Printf("Ошибка при сохранении выражения в базу данных (ID: %s, UserID: %d): %v", expressionID, userID, err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Failed to save expression")
+		return
+	}
+	log.Printf("Выражение сохранено в БД (ID: %s, UserID: %d)", expressionID, userID)
+
+	// 6. Сохраняем сгенерированные задачи в базу данных, связывая их с выражением.
+	insertTaskSQL := `INSERT INTO tasks (id, expression_id, operation, arg1, arg2, status, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+
+	// Проходим по списку задач, которые мы сформировали из дерева.
+	for _, task := range tasksToSave {
+		// Перед сохранением задачи, связываем ее с ID выражения.
+		task.ExpressionID = expressionID // Заполняем поле ExpressionID
+
+		// Сохраняем каждую задачу.
+		_, err = s.DB.Exec(insertTaskSQL, task.ID, task.ExpressionID, task.Operation, task.Arg1, task.Arg2, task.Status)
+		if err != nil {
+			log.Printf("Ошибка при сохранении задачи в базу данных (TaskID: %s, Operation: %s, Args: %s, %s, ExpressionID: %s): %v", task.ID, task.Operation, task.Arg1, task.Arg2, task.ExpressionID, err)
+			localHTTP.RespondError(w, http.StatusInternalServerError, "Failed to save tasks")
+			return
+		}
+		log.Printf("Задача сохранена в БД (TaskID: %s, Operation: %s, Args: %s, %s, ExpressionID: %s)", task.ID, task.Operation, task.Arg1, task.Arg2, task.ExpressionID)
+	}
+
+	// 7. Отправляем ответ с ID созданного выражения.
+	responsePayload := CalculateResponse{ID: expressionID}
+	log.Printf("Вычисление выражения запрошено успешно. ID выражения: %s", expressionID)
+	localHTTP.RespondJSON(w, http.StatusOK, responsePayload)
 }
 
 func (s *APIService) ListExpressionsHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализация получения списка выражений из БД для текущего пользователя
 	log.Println("Вызван ListExpressionsHandler (TODO)")
 	w.Write([]byte("List Expressions endpoint (TODO)"))
 }
 
 func (s *APIService) GetExpressionHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализация получения выражения по ID из БД для текущего пользователя (с учетом пользователя)
 	log.Println("Вызван GetExpressionHandler (TODO)")
-	// Пример получения переменной из пути (id)
-	// vars := mux.Vars(r) // Нужен импорт "github.com/gorilla/mux" в этом файле, если использовать здесь
-	// expressionID := vars["id"]
 	w.Write([]byte("Get Expression endpoint (TODO)"))
 }

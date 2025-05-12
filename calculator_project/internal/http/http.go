@@ -1,44 +1,38 @@
-package http // Объявляем пакет http (внутри internal)
+package http
 
 import (
-	"encoding/json" // Для работы с JSON
-	"log"           // Для логирования ошибок
-	"net/http"      // Для работы с HTTP
+	"encoding/json"
+	"log"
+	"net/http"
 )
 
-// RespondJSON: Отправляет HTTP-ответ в формате JSON с указанным статус кодом и телом (payload).
-// payload - это структура или другое значение, которое будет преобразовано в JSON.
+// RespondJSON отправляет HTTP-ответ в формате JSON.
+// Принимает http.ResponseWriter, статус код и данные для кодирования в JSON.
 func RespondJSON(w http.ResponseWriter, status int, payload interface{}) {
-	// Сначала полностью маршалируем (преобразуем в JSON-байты) тело ответа.
+	// Кодируем данные payload в JSON байты.
 	response, err := json.Marshal(payload)
 	if err != nil {
-		// Если маршалирование не удалось (например, структура содержит циклические ссылки, что редкость),
-		// логируем эту внутреннюю ошибку сервера.
-		log.Printf("Ошибка при маршалировании JSON ответа: %v", err)
-		// И отправляем стандартизированный ответ об внутренней ошибке сервера (500).
-		// Используем RespondError, чтобы быть последовательными.
+		// Если при кодировании произошла ошибка, логируем ее.
+		log.Printf("Ошибка маршалинга JSON ответа: %v", err)
+		// И отправляем ответ об внутренней ошибке сервера.
 		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
-		return // Завершаем выполнение функции
+		return
 	}
 
-	// Если маршалирование прошло успешно, теперь можно безопасно установить заголовки,
-	// статус и записать готовое JSON-тело.
-	w.Header().Set("Content-Type", "application/json") // Устанавливаем Content-Type
-	w.WriteHeader(status)                              // Устанавливаем HTTP статус код
-	w.Write(response)                                  // Записываем готовые JSON-байты в тело ответа
+	// Устанавливаем заголовок, статус код и записываем JSON в тело ответа.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, err = w.Write(response)
+	if err != nil {
+		// Логируем ошибку, если не удалось записать ответ.
+		log.Printf("Ошибка записи JSON ответа в ResponseWriter: %v", err)
+		// В этом случае статус уже отправлен, дополнительный ответ об ошибке невозможен.
+	}
 }
 
-// RespondError: Отправляет стандартизированный JSON-ответ об ошибке с указанным статус кодом и сообщением.
-// Формат ошибки согласно условию проекта: {"error": "сообщение об ошибке"}.
+// RespondError отправляет стандартизированный JSON-ответ об ошибке.
 func RespondError(w http.ResponseWriter, status int, message string) {
-	// Создаем структуру (карту) для тела ответа об ошибке.
+	// Готовим структуру для ответа об ошибке.
 	errorResponse := map[string]string{"error": message}
-	// Используем RespondJSON для отправки этого тела об ошибке.
-	// В данном случае payload (errorResponse) - это простая карта, которая всегда успешно маршалируется в JSON.
-	// Если RespondJSON вдруг вернет ошибку при маршалировании errorResponse (крайне маловероятно),
-	// оно само обработает это как внутреннюю ошибку.
 	RespondJSON(w, status, errorResponse)
 }
-
-// Этот файл следует сохранить как internal/http/http.go
-// Убедись, что у тебя установлена библиотека log (входит в стандартную библиотеку Go) и encoding/json, net/http.
