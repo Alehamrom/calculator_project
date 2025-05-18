@@ -1,0 +1,31 @@
+version: '3.8'
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    volumes:
+      - orchestrator_data:/app/data
+    environment:
+      - DATABASE_FILE=/app/data/calculator.db
+      - HTTP_LISTEN_ADDR=:8080
+      - GRPC_LISTEN_ADDR=:50051
+      - JWT_SECRET=ochen_slozhni_klych_kotori_nickto_ne_vslomaet
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent 
+    environment:
+      - ORCHESTRATOR_GRPC_ADDRESS=orchestrator:50051
+      - AGENT_ID=agent-${HOSTNAME}
+
+    depends_on:
+      - orchestrator
+
+volumes:
+  orchestrator_data:

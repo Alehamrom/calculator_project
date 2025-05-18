@@ -18,7 +18,7 @@ import (
 	localModels "calculator_project/internal/models"
 
 	"github.com/golang-jwt/jwt/v5"
-	// "github.com/gorilla/mux"
+	"github.com/gorilla/mux"
 )
 
 // Структуры для запросов и ответов API
@@ -56,12 +56,12 @@ type APIService struct {
 	DB *sql.DB
 
 	// Конфигурация, необходимая обработчикам.
-	JWTSecret string // Секретный ключ для подписи JWT токенов
+	JWTSecret []byte // Секретный ключ для подписи JWT токенов
 	// Здесь можно будет добавить другие зависимости, например, менеджер задач и т.д.
 }
 
 // NewAPIService: Функция-конструктор для создания нового экземпляра APIService.
-func NewAPIService(db *sql.DB, jwtSecret string) *APIService {
+func NewAPIService(db *sql.DB, jwtSecret []byte) *APIService {
 	return &APIService{
 		DB:        db,
 		JWTSecret: jwtSecret, // Сохраняем секрет в структуре
@@ -219,20 +219,13 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 
 	defer r.Body.Close()
 
-	userID := int64(1) // Временно для тестирования CalculateHandler без middleware
-
-	log.Printf("CalculateHandler: Запрос на вычисление выражения от пользователя с ID: %d", userID)
-
-	// Оригинальный блок получения UserID из контекста (закомментирован)
-	/*
-		userID, ok := r.Context().Value(localAuth.UserIDKey).(int64)
-		if !ok {
-			log.Println("CalculateHandler: UserID не найден в контексте запроса. Запрос не авторизован или проблема middleware.")
-			localHTTP.RespondError(w, http.StatusUnauthorized, "Unauthorized: User ID not found in context") // Или 500
-			return
-		}
-		log.Printf("CalculateHandler: Запрос на вычисление выражения от пользователя с ID: %d", userID)
-	*/
+	userID, ok := r.Context().Value(localAuth.UserIDKey).(int64) // localAuth.UserIDKey - это константа из пакета internal/auth
+	if !ok {
+		log.Println("Handler: UserID не найден в контексте запроса. Запрос не авторизован или проблема middleware.")
+		localHTTP.RespondError(w, http.StatusUnauthorized, "Unauthorized: User ID not found in context")
+		return
+	}
+	log.Printf("Handler: Запрос от пользователя с ID: %d", userID)
 
 	// 1. Парсим тело запроса.
 	var req CalculateRequest
@@ -253,13 +246,13 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Попытка парсинга выражения: %s", req.Expression)
 
 	// *** 3. Парсинг выражения нашим парсером и создание задач. ***
-	// Создаем новый экземпляр парсера
-	parserState := localParser.NewParser(req.Expression) // NewParser
-	// Парсим выражение в дерево узлов
-	rootNode, err := parserState.ParseExpression() // ParseExpression
-
+	parserState := localParser.NewParser(req.Expression)
+	rootNode, err := parserState.ParseExpression()
 	if err != nil {
-		return
+		// Если парсер вернул ошибку, отвечаем клиенту
+		log.Printf("Ошибка парсинга выражения '%s': %v", req.Expression, err)
+		localHTTP.RespondError(w, http.StatusBadRequest, fmt.Sprintf("Invalid expression format: %v", err))
+		return // Важно выйти после ответа
 	}
 
 	// Проверяем, что после парсинга не осталось необработанных символов
@@ -267,14 +260,11 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 	if parserState.Pos < len(parserState.Input) {
 		log.Printf("Ошибка парсинга: необработанные символы '%s' в конце выражения", parserState.Input[parserState.Pos:])
 		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid expression format: unexpected characters at the end")
-		return
+		return // Важно выйти после ответа
 	}
 
-	// Список для хранения сгенерированных задач
-	tasksToSave := []localParser.CalculationTask{}
-
-	// Обходим дерево узлов и формируем список задач
-	// Результат обхода корневого узла - это ID последней задачи (или число), представляющей результат всего выражения.
+	tasksToSave := []localModels.CalculationTask{}
+	// !!! NodeToTasks возвращает ID корневой задачи (или значение числа, если выражение = число) !!!
 	finalResultIDOrValue, err := localParser.NodeToTasks(rootNode, &tasksToSave)
 
 	if err != nil {
@@ -284,37 +274,43 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Выражение успешно спарсено и сформировано %d задач.", len(tasksToSave))
+	// Этот лог подтверждает, что RootTaskID получен парсером:
 	log.Printf("Конечный результат выражения представлен ID задачи или значением: %s", finalResultIDOrValue)
 
 	// 4. Генерируем уникальный ID для выражения.
 	expressionID := uuid.New().String() // Используем библиотеку uuid для генерации ID
 
 	// 5. Сохраняем выражение в базу данных.
-	insertExpressionSQL := `INSERT INTO expressions (id, user_id, expression_string, status, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+	// !!! ЭТОТ SQL ЗАПРОС ДОЛЖЕН ВКЛЮЧАТЬ root_task_id !!!
+	insertExpressionSQL := `INSERT INTO expressions (id, user_id, expression_string, status, root_task_id, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
 	expressionStatus := "Pending" // Начальный статус выражения.
 
-	_, err = s.DB.Exec(insertExpressionSQL, expressionID, userID, req.Expression, expressionStatus)
+	// !!! ЭТОТ ВЫЗОВ EXEC ДОЛЖЕН ПЕРЕДАВАТЬ finalResultIDOrValue ДЛЯ колонки root_task_id !!!
+	_, err = s.DB.Exec(insertExpressionSQL, expressionID, userID, req.Expression, expressionStatus, finalResultIDOrValue)
 	if err != nil {
 		log.Printf("Ошибка при сохранении выражения в базу данных (ID: %s, UserID: %d): %v", expressionID, userID, err)
+		// В более надежной системе здесь нужно подумать о транзакциях.
 		localHTTP.RespondError(w, http.StatusInternalServerError, "Failed to save expression")
 		return
 	}
-	log.Printf("Выражение сохранено в БД (ID: %s, UserID: %d)", expressionID, userID)
+	// Добавлен лог, чтобы увидеть, что именно сохраняется в root_task_id
+	log.Printf("Выражение сохранено в БД (ID: %s, UserID: %d, RootTaskID: %s)", expressionID, userID, finalResultIDOrValue)
 
 	// 6. Сохраняем сгенерированные задачи в базу данных, связывая их с выражением.
 	insertTaskSQL := `INSERT INTO tasks (id, expression_id, operation, arg1, arg2, status, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
 
-	// Проходим по списку задач, которые мы сформировали из дерева.
 	for _, task := range tasksToSave {
-		// Перед сохранением задачи, связываем ее с ID выражения.
-		task.ExpressionID = expressionID // Заполняем поле ExpressionID
+		task.ExpressionID = expressionID // Связываем задачу с выражением
 
-		// Сохраняем каждую задачу.
 		_, err = s.DB.Exec(insertTaskSQL, task.ID, task.ExpressionID, task.Operation, task.Arg1, task.Arg2, task.Status)
 		if err != nil {
 			log.Printf("Ошибка при сохранении задачи в базу данных (TaskID: %s, Operation: %s, Args: %s, %s, ExpressionID: %s): %v", task.ID, task.Operation, task.Arg1, task.Arg2, task.ExpressionID, err)
-			localHTTP.RespondError(w, http.StatusInternalServerError, "Failed to save tasks")
-			return
+			// Важно: Если сохранение задачи провалилось, мы должны пометить ВЫРАЖЕНИЕ как Failed.
+			// В более надежной системе здесь нужно начать транзакцию для CalculateHandler,
+			// откатывать ее и обновлять статус выражения на Failed при любой ошибке после парсинга.
+			// Пока для простоты просто логируем и возвращаем ошибку.
+			localHTTP.RespondError(w, http.StatusInternalServerError, "Failed to save task")
+			return // Выходим, т.к. не смогли сохранить все задачи
 		}
 		log.Printf("Задача сохранена в БД (TaskID: %s, Operation: %s, Args: %s, %s, ExpressionID: %s)", task.ID, task.Operation, task.Arg1, task.Arg2, task.ExpressionID)
 	}
@@ -326,11 +322,252 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIService) ListExpressionsHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Вызван ListExpressionsHandler (TODO)")
-	w.Write([]byte("List Expressions endpoint (TODO)"))
+	log.Println("Вызван ListExpressionsHandler")
+
+	// 1. Получаем ID пользователя из контекста запроса (добавлено AuthMiddleware).
+	// Используем вспомогательную функцию GetUserIDFromContext из пакета auth.
+	userID, ok := localAuth.GetUserIDFromContext(r.Context()) // <--- Получаем UserID из контекста
+	if !ok {
+		// Если UserID не найден в контексте, это ошибка middleware или неправильное использование.
+		log.Println("ListExpressionsHandler: UserID не найден в контексте запроса.")
+		localHTTP.RespondError(w, http.StatusUnauthorized, "Unauthorized: User ID not found in context")
+		return // Обязательно выходим
+	}
+	log.Printf("ListExpressionsHandler: Запрос списка выражений от пользователя с ID: %d", userID)
+
+	// 2. Выбираем все выражения для данного пользователя из базы данных.
+	// Сортируем по дате создания, чтобы видеть последние сверху.
+	selectExpressionsSQL := `
+		SELECT id, user_id, expression_string, status, root_task_id, result, error_message, created_at, updated_at
+		FROM expressions
+		WHERE user_id = ?
+		ORDER BY created_at DESC`
+
+	// Выполняем запрос к базе данных.
+	// Используем QueryContext для возможности отмены запроса, передавая контекст запроса.
+	rows, err := s.DB.QueryContext(r.Context(), selectExpressionsSQL, userID)
+	if err != nil {
+		log.Printf("ListExpressionsHandler: Ошибка при выборке выражений для пользователя %d из БД: %v", userID, err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Ошибка сервера при получении списка выражений")
+		return
+	}
+	defer rows.Close() // Важно закрыть набор результатов после использования
+
+	// 3. Сканируем результаты запроса в список структур Expression.
+	expressions := []localModels.Expression{} // Слайс для хранения выражений
+
+	for rows.Next() {
+		var expr localModels.Expression // Переменная для сканирования текущей строки выражения
+		// Используем sql.NullString для сканирования nullable полей (result, error_message).
+		// Твоя структура Expression имеет Result как sql.NullString - это нужно учесть при сканировании.
+		// ОШИБКА в моей Expression структуре выше, Result должен быть sql.NullFloat64!
+		// Давай исправим мою структуру Expression в models.go.
+		// Исходя из твоего models.go, Expression.FinalResult - sql.NullString. Ок, используем это.
+
+		// Сканируем данные из строки БД в структуру Expression.
+		// Убедись, что порядок полей соответствует SELECT запросу.
+		// NOTE: Expression.FinalResult у тебя sql.NullString, а не sql.NullFloat64. Сканируем в него.
+		// В SQL у тебя колонка 'result' REAL NULL. Сканировать REAL NULL в sql.NullString - НЕПРАВИЛЬНО.
+		// Это приведет к ошибке сканирования!
+		// Expression.FinalResult ДОЛЖЕН быть sql.NullFloat64 или sql.NullString, но в базе 'result' - REAL.
+		// Если в БД 'result' REAL NULL, а в Go struct Expression.FinalResult sql.NullString,
+		// нужно или поменять тип в SQL, или поменять тип в Go struct, или сканировать в sql.NullFloat64
+		// и затем преобразовывать.
+		// Давай предположим, что в твоем models.go, Expression.FinalResult - sql.NullFloat64.
+		// ИЛИ что ты готов поменять его на sql.NullFloat64. ИЛИ что в БД 'result' на самом деле TEXT NULL.
+		// Исходя из твоего models.go, Expression.FinalResult - sql.NullString.
+		// Но в SQL схеме, которую мы делали, 'result' в expressions был REAL NULL.
+		// Это несоответствие!
+		// Для 'result' (который REAL) нужно использовать sql.NullFloat64 в Go struct.
+		// А для error_message (TEXT) - sql.NullString.
+
+		// ВАЖНО: Исходя из твоего models.go (Expression): FinalResult sql.NullString, ErrorMessage sql.NullString.
+		// В SQL схеме (expressions): result REAL NULL, error_message TEXT NULL.
+		// Это НЕПРАВИЛЬНОЕ СООТВЕТСТВИЕ ТИПОВ!
+		// REAL в SQL нужно сканировать в sql.NullFloat64 в Go.
+		// TEXT в SQL нужно сканировать в sql.NullString в Go.
+		// Тебе нужно исправить struct Expression в models.go:
+		// FinalResult sql.NullFloat64
+		// ErrorMessage sql.NullString
+
+		// ПРЕДПОЛАГАЕМ, что ты исправил Expression.FinalResult на sql.NullFloat64 в models.go:
+		// Тогда сканируем так:
+		err := rows.Scan(
+			&expr.ID,
+			&expr.UserID,
+			&expr.ExpressionString,
+			&expr.Status,
+			&expr.RootTaskID,   // <--- Сканируем root_task_id сюда (sql.NullString)
+			&expr.FinalResult,  // <--- Сканируем result сюда (sql.NullFloat64)
+			&expr.ErrorMessage, // <--- Сканируем error_message сюда (sql.NullString)
+			&expr.CreatedAt,
+			&expr.UpdatedAt,
+		)
+		if err != nil {
+			log.Printf("ListExpressionsHandler: Ошибка сканирования строки выражения для пользователя %d: %v", userID, err)
+			// Продолжаем сканировать другие строки, но логируем ошибку.
+			continue
+		}
+
+		// Добавляем отсканированное выражение в список.
+		expressions = append(expressions, expr)
+	}
+
+	// Проверяем ошибки, которые могли возникнуть при обходе строк (rows.Err()).
+	if err := rows.Err(); err != nil {
+		log.Printf("ListExpressionsHandler: Ошибка после обхода выражений для пользователя %d: %v", userID, err)
+		// Это ошибка при чтении из набора результатов, может указывать на проблему с БД.
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Ошибка сервера при получении списка выражений после выборки")
+		return
+	}
+
+	// 4. Отправляем список выражений в формате JSON.
+	// При кодировании в JSON, sql.NullFloat64 и sql.NullString с Valid=false будут преобразованы в null JSON.
+	localHTTP.RespondJSON(w, http.StatusOK, expressions)
+
+	log.Printf("ListExpressionsHandler: Успешно отправлен список из %d выражений для пользователя %d", len(expressions), userID)
 }
 
+// GetExpressionHandler: Обработчик HTTP-запросов на получение деталей одного выражения пользователя по ID.
+// GET /api/v1/expressions/{id}
+// Должен быть защищен AuthMiddleware.
+// TODO: Реализовать GetExpressionHandler
+type ExpressionDetailsResponse struct {
+	localModels.Expression                               // Встраиваем структуру Expression
+	Tasks                  []localModels.CalculationTask `json:"tasks"` // Список задач выражения
+}
+
+// GetExpressionHandler: Обработчик HTTP-запросов на получение деталей одного выражения пользователя по ID.
+// GET /api/v1/expressions/{id}
+// Должен быть защищен AuthMiddleware.
 func (s *APIService) GetExpressionHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Вызван GetExpressionHandler (TODO)")
-	w.Write([]byte("Get Expression endpoint (TODO)"))
+	log.Println("Вызван GetExpressionHandler")
+
+	// 1. Получаем ID выражения из URL (из переменной пути).
+	// Используем пакет gorilla/mux для извлечения переменных пути.
+	vars := mux.Vars(r) // <--- Используем mux.Vars для получения {id}
+	expressionID := vars["id"]
+
+	if expressionID == "" {
+		log.Println("GetExpressionHandler: ID выражения не указан в URL.")
+		localHTTP.RespondError(w, http.StatusBadRequest, "Expression ID is required")
+		return
+	}
+
+	_, err := uuid.Parse(expressionID)
+	if err != nil {
+		log.Printf("GetExpressionHandler: Невалидный формат UUID для ID выражения: %s. Ошибка: %v", expressionID, err)
+		localHTTP.RespondError(w, http.StatusBadRequest, "Invalid expression ID format")
+		return // Важно выйти из функции после отправки ошибки
+	}
+
+	log.Printf("GetExpressionHandler: Запрос деталей выражения с ID: %s", expressionID)
+
+	// 2. Получаем ID пользователя из контекста запроса (добавлено AuthMiddleware).
+	userID, ok := localAuth.GetUserIDFromContext(r.Context())
+	if !ok {
+		log.Println("GetExpressionHandler: UserID не найден в контексте запроса.")
+		localHTTP.RespondError(w, http.StatusUnauthorized, "Unauthorized: User ID not found in context")
+		return // Обязательно выходим
+	}
+	log.Printf("GetExpressionHandler: Запрос от пользователя с ID: %d", userID)
+
+	// 3. Выбираем выражение из базы данных по его ID И ID пользователя.
+	// Это гарантирует, что пользователь может получить доступ только к СВОИМ выражениям.
+	selectExpressionSQL := `
+        SELECT id, user_id, expression_string, status, result, error_message, created_at, updated_at
+        FROM expressions
+        WHERE id = ? AND user_id = ?`
+
+	var expr localModels.Expression // Переменная для хранения данных выражения
+
+	// Выполняем запрос. Используем QueryRowContext для выборки одной строки.
+	// Убедись, что в твоем models.go Expression.FinalResult - sql.NullFloat64, а ErrorMessage - sql.NullString
+	err = s.DB.QueryRowContext(r.Context(), selectExpressionSQL, expressionID, userID).Scan( // <--- Передаем оба ID в запрос
+		&expr.ID,
+		&expr.UserID,
+		&expr.ExpressionString,
+		&expr.Status,
+		&expr.FinalResult,  // sql.NullFloat64
+		&expr.ErrorMessage, // sql.NullString
+		&expr.CreatedAt,
+		&expr.UpdatedAt,
+	)
+
+	// Обрабатываем ошибки выборки выражения.
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// Если выражение с таким ID и UserID не найдено.
+			log.Printf("GetExpressionHandler: Выражение с ID %s для пользователя %d не найдено.", expressionID, userID)
+			// Возвращаем 404 Not Found.
+			localHTTP.RespondError(w, http.StatusNotFound, fmt.Sprintf("Expression with ID %s not found for this user", expressionID))
+			return
+		}
+		// Если произошла другая ошибка базы данных.
+		log.Printf("GetExpressionHandler: Ошибка при выборке выражения с ID %s для пользователя %d из БД: %v", expressionID, userID, err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Ошибка сервера при получении деталей выражения")
+		return
+	}
+
+	// Если выражение успешно найдено.
+	// 4. Выбираем все задачи, связанные с этим выражением.
+	selectTasksSQL := `
+		SELECT id, expression_id, operation, arg1, arg2, status, result, error_message, created_at, updated_at
+		FROM tasks
+		WHERE expression_id = ?` // <--- Выбираем задачи по ID выражения
+
+	// Выполняем запрос к базе данных для задач.
+	rows, err := s.DB.QueryContext(r.Context(), selectTasksSQL, expressionID)
+	if err != nil {
+		log.Printf("GetExpressionHandler: Ошибка при выборке задач для выражения %s из БД: %v", expressionID, err)
+		// Возвращаем ошибку сервера, но выражение само найдено.
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Ошибка сервера при получении задач выражения")
+		return
+	}
+	defer rows.Close() // Закрываем набор результатов
+
+	// 5. Сканируем результаты запроса задач в список структур CalculationTask.
+	tasks := []localModels.CalculationTask{} // Слайс для хранения задач
+
+	for rows.Next() {
+		var task localModels.CalculationTask // Переменная для сканирования текущей строки задачи
+		// Сканируем данные в структуру CalculationTask.
+		// Убедись, что поля Result (sql.NullFloat64) и ErrorMessage (sql.NullString) сканируются корректно.
+		err := rows.Scan(
+			&task.ID,
+			&task.ExpressionID,
+			&task.Operation,
+			&task.Arg1,
+			&task.Arg2,
+			&task.Status,
+			&task.Result,       // sql.NullFloat64
+			&task.ErrorMessage, // sql.NullString
+			&task.CreatedAt,
+			&task.UpdatedAt,
+		)
+		if err != nil {
+			log.Printf("GetExpressionHandler: Ошибка сканирования строки задачи для выражения %s: %v", expressionID, err)
+			// Продолжаем сканировать другие задачи, но логируем ошибку.
+			continue
+		}
+		// Добавляем отсканированную задачу в список.
+		tasks = append(tasks, task)
+	}
+
+	// Проверяем ошибки после обхода строк задач.
+	if err := rows.Err(); err != nil {
+		log.Printf("GetExpressionHandler: Ошибка после обхода задач для выражения %s: %v", expressionID, err)
+		localHTTP.RespondError(w, http.StatusInternalServerError, "Ошибка сервера при получении задач выражения после выборки")
+		return
+	}
+
+	// 6. Собираем ответную структуру и отправляем ее в формате JSON.
+	responsePayload := localModels.ExpressionDetailsResponse{
+		Expression: expr,
+		Tasks:      tasks,
+	}
+
+	localHTTP.RespondJSON(w, http.StatusOK, responsePayload)
+
+	log.Printf("GetExpressionHandler: Успешно отправлены детали выражения %s для пользователя %d (наидено %d задач)", expressionID, userID, len(tasks))
 }
