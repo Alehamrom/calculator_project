@@ -1,20 +1,14 @@
-// internal/auth/auth_test.go
-package auth // Файл тестов находится в том же пакете 'auth'
+package auth
 
 import (
 	"fmt"
-	"strings" // Для проверки подстроки в ошибках
-	"testing" // Стандартный пакет Go для тестов
-	"time"    // Для работы со временем (особенно для тестов JWT)
-
-	// Важно: убедись, что у тебя в проекте используется библиотека github.com/golang-jwt/jwt/v5
-	// Именно ее типы и функции (например, jwt.MapClaims, jwt.NewWithClaims, jwt.SigningMethodHS256)
-	// используются для тестирования токенов. Если ты использовал другую библиотеку, тесты нужно будет адаптировать.
 	"github.com/golang-jwt/jwt/v5"
+	"strings"
+	"testing"
+	"time"
 )
 
-// Используем тестовый секретный ключ для JWT. В реальном коде этот ключ должен быть надежным.
-var testSecret = []byte("very_secret_test_key_for_jwt") // Длинный и уникальный для тестов
+var testSecret = []byte("very_secret_test_key_for_jwt")
 
 // TestHashPassword тестирует функцию HashPassword.
 func TestHashPassword(t *testing.T) {
@@ -90,10 +84,6 @@ func TestGenerateJWT(t *testing.T) {
 	if tokenString == "" {
 		t.Errorf("GenerateJWT вернула пустую строку токена для UserID %d", userID)
 	}
-
-	// Опционально: Пытаемся разобрать сгенерированный токен без проверки подписи,
-	// чтобы проверить его структуру и наличие нужных claims (полей данных).
-	// Это предполагает использование github.com/golang-jwt/jwt/v5.
 	token, _, parseErr := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
 	if parseErr != nil {
 		t.Errorf("Не удалось разобрать сгенерированный токен '%s': %v", tokenString, parseErr)
@@ -134,8 +124,6 @@ func TestValidateJWT(t *testing.T) {
 	secret := testSecret                  // Секретный ключ, использованный для генерации токена
 	wrongSecret := []byte("wrong_secret") // Другой, некорректный секретный ключ
 
-	// --- Тестовые случаи с валидным токеном ---
-
 	// Генерируем валидный токен для UserID и секретного ключа.
 	validTokenString, err := GenerateJWT(int64(userID), secret)
 	if err != nil {
@@ -152,8 +140,6 @@ func TestValidateJWT(t *testing.T) {
 	if validatedUserID != expectedUserID {
 		t.Errorf("ValidateJWT вернула UserID %d для валидного токена, ожидалось %d", validatedUserID, userID)
 	}
-
-	// --- Тестовые случаи с некорректными токенами/секретами ---
 
 	// Тестовый случай 2.1: Некорректная строка токена (не формат JWT). Ожидаем ошибку.
 	invalidTokenString := "это.не.является.jwt.токеном"
@@ -238,6 +224,4 @@ func TestValidateJWT(t *testing.T) {
 	if validatedUserID != 0 && validatedUserID != -1 {
 		t.Logf("ValidateJWT вернула UserID %d для просроченного токена (ожидалось 0 или -1)", validatedUserID) // Используем Logf
 	}
-
-	// TODO: Можно добавить тесты для токенов, срок действия которых начнется в будущем (nbf - not before).
 }

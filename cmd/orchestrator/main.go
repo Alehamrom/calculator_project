@@ -12,26 +12,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/mux" // Маршрутизатор HTTP
+	"github.com/gorilla/mux"
 
-	// Драйвер SQLite3
 	_ "modernc.org/sqlite"
 
-	// Миграции базы данных
-	// "github.com/golang-migrate/migrate/v4"
-	// _ "github.com/golang-migrate/migrate/v4/database/sqlite"
-	// _ "github.com/golang-migrate/migrate/v4/source/file" // Для загрузки миграций из файлов
-
-	localAuth "calculator_project/internal/auth"     // Пакет для аутентификации
-	localConfig "calculator_project/internal/config" // Пакет для конфигурации
-	generatedGrpc "calculator_project/internal/orchestrator/grpc"
-	// localGRPC "calculator_project/internal/orchestrator/grpc"         // GRPC сервер
+	localAuth "calculator_project/internal/auth"
+	localConfig "calculator_project/internal/config"
 	localDB "calculator_project/internal/orchestrator/db"
-	serverImpl "calculator_project/internal/orchestrator/grpcserver"  // <-- Импорт для твоего server.go и GRPCServer
-	localHandlers "calculator_project/internal/orchestrator/handlers" // HTTP обработчики
-	// localStorage "calculator_project/internal/orchestrator/storage"   // Возможно, понадобится для тестов или будущих фич, пока не используется напрямую в handlers
-
-	"google.golang.org/grpc" // Пакет gRPC
+	generatedGrpc "calculator_project/internal/orchestrator/grpc"
+	serverImpl "calculator_project/internal/orchestrator/grpcserver"
+	localHandlers "calculator_project/internal/orchestrator/handlers"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -58,32 +49,6 @@ func main() {
 	}
 	log.Printf("Database '%s' initialized successfully.", cfg.DatabaseFile)
 
-	/*
-		// 3. Применение миграций базы данных.
-		// Важно применять миграции ПОСЛЕ открытия соединения.
-		log.Println("Применение миграций базы данных...")
-		// Строка соединения для миграций может немного отличаться,
-		// добавляя `?x-pragma='_journal=WAL'&x-pragma='_foreign_keys=on'`.
-		// Убедись, что у тебя есть папка `migrations` с файлами миграций `.sql`.
-		m, err := migrate.New(
-			"file://migrations", // Путь к файлам миграций (относительно корня проекта)
-			fmt.Sprintf("sqlite://%s?_journal=WAL&_foreign_keys=on", cfg.DatabaseFile), // Строка подключения для миграций
-		)
-		if err != nil {
-			log.Fatalf("Ошибка при создании экземпляра миграций: %v", err)
-		}
-
-		// Применяем все доступные миграции вверх.
-		if err = m.Up(); err != nil && err != migrate.ErrNoChange {
-			// Если ошибка не "нет изменений", то это реальная проблема.
-			log.Fatalf("Ошибка применения миграций: %v", err)
-		}
-		if err == migrate.ErrNoChange {
-			log.Println("Миграции не применены: нет изменений.")
-		} else {
-			log.Println("Миграции успешно применены.")
-		}
-	*/
 	log.Println("База данных инициализирована успешно.") // Этот лог может быть после инициализации или после миграций
 
 	// 4. Создание экземпляров сервисов (HTTP API и gRPC).
@@ -92,10 +57,6 @@ func main() {
 	apiService := localHandlers.NewAPIService(db, []byte(cfg.JWTSecret))
 
 	// localGRPC.NewGRPCServer принимает DB и Config.
-	// Убедись, что в GRPCServer тебе нужен Config (для длительности операций).
-	// Если в GRPCServer нужна только длительность, лучше передать только ее.
-	// Исходя из твоего кода GRPCServer, он принимает DB и Config. Оставим так.
-	// Если в GRPCServer не нужен ВЕСЬ конфиг, передай только нужные поля.
 	grpcServerInstance := serverImpl.NewGRPCServer(db, cfg) // Создаем экземпляр gRPC сервера
 
 	// 5. Настройка и запуск gRPC-сервера в отдельной горутине.
@@ -187,7 +148,7 @@ func main() {
 	// Запускаем процедуру плавного завершения gRPC-сервера.
 	log.Println("Остановка gRPC сервера...")
 	// GracefulStop позволяет gRPC серверу дождаться завершения текущих запросов.
-	grpcServer.GracefulStop() // <--- Реализация graceful shutdown для gRPC
+	grpcServer.GracefulStop()
 	log.Println("gRPC server плавно остановлен.")
 
 	log.Println("Сервис Оркестратора остановлен.")

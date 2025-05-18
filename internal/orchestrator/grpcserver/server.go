@@ -5,14 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"regexp" // !!! ДОБАВЬ ЭТОТ ИМПОРТ !!!
+	"regexp"
 	"strconv"
-
-	//"strings" // Возможно, уже есть, но может понадобиться
-	//"sync"
 	"time"
 
-	"calculator_project/internal/config" // <-- Добавь этот импорт, если его нет
+	"calculator_project/internal/config"
 	localModels "calculator_project/internal/models"
 	pb "calculator_project/internal/orchestrator/grpc"
 
@@ -22,7 +19,6 @@ import (
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// isUUID проверяет, выглядит ли строка как UUID.
 func isUUID(s string) bool {
 	return uuidRegex.MatchString(s)
 }
@@ -32,26 +28,24 @@ func isUUID(s string) bool {
 type GRPCServer struct {
 	pb.UnimplementedCalculatorServiceServer // Встраиваем сгенерированную заглушку
 
-	DB     *sql.DB        // Соединение с базой данных
-	Config *config.Config // <-- ДОБАВЛЯЕМ: Конфигурация сервиса Оркестратора
-	// TODO: Добавить менеджер задач или другой компонент.
+	DB     *sql.DB // Соединение с базой данных
+	Config *config.Config
 }
 
 // NewGRPCServer создает новый экземпляр GRPCServer.
 // Принимает необходимые зависимости: DB и Config.
-func NewGRPCServer(db *sql.DB, cfg *config.Config) *GRPCServer { // <--- ИЗМЕНИ СИГНАТУРУ ФУНКЦИИ ТАК
+func NewGRPCServer(db *sql.DB, cfg *config.Config) *GRPCServer {
 	return &GRPCServer{
 		UnimplementedCalculatorServiceServer: pb.UnimplementedCalculatorServiceServer{},
 		DB:                                   db,
-		Config:                               cfg, // <-- Сохраняем Config в структуре сервера
+		Config:                               cfg,
 	}
 }
 
 // getOperationDuration: Вспомогательная функция (метод GRPCServer) для получения времени выполнения операции из конфигурации.
 // Принимает строку с названием операции (напр., "+").
 // Возвращает time.Duration, соответствующую времени выполнения этой операции согласно конфигурации.
-func (s *GRPCServer) getOperationDuration(operation string) time.Duration { // <--- ДОБАВЬ ЭТУ ФУНКЦИЮ ЦЕЛИКОМ
-	// <--- ДОБАВЛЕНО: Логирование входящей операции
+func (s *GRPCServer) getOperationDuration(operation string) time.Duration {
 	log.Printf("getOperationDuration: Получена операция='%s'", operation)
 
 	// Используем значения времени из загруженной конфигурации Оркестратора (s.Config).
@@ -59,22 +53,22 @@ func (s *GRPCServer) getOperationDuration(operation string) time.Duration { // <
 	// Возвращаем как time.Duration.
 	switch operation {
 	case "+":
-		log.Println("getOperationDuration: Совпадение с '+', возвращаем", s.Config.TimeAdditionMs) // <--- ДОБАВЛЕНО: Логирование соответствия
+		log.Println("getOperationDuration: Совпадение с '+', возвращаем", s.Config.TimeAdditionMs)
 		return s.Config.TimeAdditionMs
 	case "-":
-		log.Println("getOperationDuration: Совпадение с '-', возвращаем", s.Config.TimeSubtractionMs) // <--- ДОБАВЛЕНО: Логирование соответствия
+		log.Println("getOperationDuration: Совпадение с '-', возвращаем", s.Config.TimeSubtractionMs)
 		return s.Config.TimeSubtractionMs
 	case "*":
-		log.Println("getOperationDuration: Совпадение с '*', возвращаем", s.Config.TimeMultiplicationMs) // <--- ДОБАВЛЕНО: Логирование соответствия
+		log.Println("getOperationDuration: Совпадение с '*', возвращаем", s.Config.TimeMultiplicationMs)
 		return s.Config.TimeMultiplicationMs
 	case "/":
-		log.Println("getOperationDuration: Совпадение с '/', возвращаем", s.Config.TimeDivisionMs) // <--- ДОБАВЛЕНО: Логирование соответствия
+		log.Println("getOperationDuration: Совпадение с '/', возвращаем", s.Config.TimeDivisionMs)
 		return s.Config.TimeDivisionMs
 	default:
 		// Для неизвестных операций или операции "number" (она не требует вычислений)
 		// возвращаем 0 задержку.
-		log.Println("getOperationDuration: Нет совпадения для операции, возвращаем 0") // <--- ДОБАВЛЕНО: Логирование отсутствия соответствия
-		return 0                                                                       // time.Duration(0)
+		log.Println("getOperationDuration: Нет совпадения для операции, возвращаем 0")
+		return 0 // time.Duration(0)
 	}
 }
 
@@ -117,7 +111,7 @@ func (s *GRPCServer) GetTask(ctx context.Context, req *pb.TaskRequest) (*pb.Task
 	// чтобы не усложнять SQL и не делать JOINы внутри критического GetTask запроса.
 	selectOnePendingTaskSQL := `SELECT id, expression_id, operation, arg1, arg2, status FROM tasks WHERE status = ? LIMIT 1`
 
-	err = tx.QueryRowContext(ctx, selectOnePendingTaskSQL, localModels.TaskStatusPending).Scan( // <--- Выбираем ОДНУ задачу
+	err = tx.QueryRowContext(ctx, selectOnePendingTaskSQL, localModels.TaskStatusPending).Scan(
 		&readyTask.ID,
 		&readyTask.ExpressionID,
 		&readyTask.Operation,
@@ -136,7 +130,6 @@ func (s *GRPCServer) GetTask(ctx context.Context, req *pb.TaskRequest) (*pb.Task
 		}
 		// Если произошла другая ошибка выборки из базы данных.
 		log.Printf("GetTask: Ошибка при выборке ОДНОЙ Pending задачи из БД: %v", err)
-		// TODO: Возможно, тут стоит добавить логику повторных попыток для SQLITE_BUSY
 		return nil, status.Errorf(codes.Internal, "Ошибка сервера при выборке Pending задач из БД")
 	}
 
@@ -190,10 +183,10 @@ func (s *GRPCServer) GetTask(ctx context.Context, req *pb.TaskRequest) (*pb.Task
 	updateTaskStatusSQL := `
 		UPDATE tasks
 		SET status = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND status = ?` // Проверяем статус Pending перед обновлением для защиты от конкуренции
+		WHERE id = ? AND status = ?`
 
 	// Выполняем обновление статуса ВНУТРИ ТРАНЗАКЦИИ.
-	resultUpdate, err := tx.ExecContext(ctx, updateTaskStatusSQL, localModels.TaskStatusInProgress, readyTask.ID, localModels.TaskStatusPending) // <--- Обновляем статус
+	resultUpdate, err := tx.ExecContext(ctx, updateTaskStatusSQL, localModels.TaskStatusInProgress, readyTask.ID, localModels.TaskStatusPending)
 	if err != nil {
 		log.Printf("GetTask: Ошибка при обновлении статуса найденной ГОТОВОЙ задачи %s на InProgress: %v", readyTask.ID, err)
 		// Откатываем (defer сработает).
@@ -214,7 +207,7 @@ func (s *GRPCServer) GetTask(ctx context.Context, req *pb.TaskRequest) (*pb.Task
 	}
 
 	// Если обновление статуса успешно, КОММИТИМ ТРАНЗАКЦИЮ.
-	err = tx.Commit() // <--- КОММИТИМ!
+	err = tx.Commit()
 	if err != nil {
 		log.Printf("GetTask: Ошибка при коммите транзакции для задачи %s: %v", readyTask.ID, err)
 		// Откатываем (defer сработает).
@@ -243,10 +236,6 @@ func (s *GRPCServer) GetTask(ctx context.Context, req *pb.TaskRequest) (*pb.Task
 		Task:   pbTask, // Передаем структуру задачи
 	}, nil // Ошибки gRPC нет
 }
-
-// Шаг 14.2: Улучшение логики SubmitResult для обработки зависимостей.
-// После завершения задачи, зависимые задачи, которые ждали ее результата, должны
-// стать "готовыми" и, возможно, перейти в статус Pending.
 
 // SubmitResult: Реализация gRPC метода для отправки результата вычисления задачи Агентом.
 // Улучшена логика обработки зависимостей: после завершения задачи, зависимые задачи
@@ -553,19 +542,9 @@ func (s *GRPCServer) SubmitResult(ctx context.Context, req *pb.ResultRequest) (*
 				}
 
 				// finalErrorMessage для успешно завершенного выражения устанавливается здесь
-				// (Если ты не установил его в начале блока if totalTasks > 0..., сделай это там)
-				// Или установи его здесь явно (так надежнее для этого случая):
 				finalErrorMessage = sql.NullString{String: "", Valid: false} // Присваиваем значение ВНЕШНЕЙ finalErrorMessage
-				// --- КОНЕЦ ЛОГИКИ ПОЛУЧЕНИЯ РЕЗУЛЬТАТА ПО ROOTTASKID ---
+			}
 
-				// updateExpressionSQL и tx.ExecContext(...) идут дальше и используют finalResult/finalErrorMessage из внешней области
-			} // Конец else (все успешно завершены)
-
-			// --- UPDATE expressions query and execution MUST be inside this block ---
-			// This 'finalResult' (sql.NullFloat64) and 'finalErrorMessage' (sql.NullString)
-			// will be used in the UPDATE expressions query.
-
-			// Update expression status and result/error in the expressions table.
 			updateExpressionSQL := `
 				UPDATE expressions
 				SET status = ?, result = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
@@ -588,7 +567,6 @@ func (s *GRPCServer) SubmitResult(ctx context.Context, req *pb.ResultRequest) (*
 			log.Printf("SubmitResult: Expression %s is not yet completed (Total: %d, Completed: %d, Failed: %d).",
 				expressionID, totalTasks, completedTasks, failedTasks)
 			// Можно обновить статус выражения на InProgress, если он еще не такой.
-			// TODO: Обновлять статус выражения на InProgress, если он был Pending.
 		}
 	} // Конец else для successful status check
 
@@ -596,7 +574,6 @@ func (s *GRPCServer) SubmitResult(ctx context.Context, req *pb.ResultRequest) (*
 	err = tx.Commit()
 	if err != nil {
 		log.Printf("SubmitResult: Ошибка при коммите транзакции обработки результата для задачи %s: %v", req.GetTaskId(), err)
-		// tx.Rollback() // Откат уже сделает defer
 		return nil, status.Errorf(codes.Internal, "Ошибка сервера при коммите обработки результата")
 	}
 

@@ -3,8 +3,6 @@ package config
 import (
 	"fmt"
 	"log"
-	// "os"
-	// "strconv"
 	"time"
 
 	"github.com/spf13/viper"
@@ -18,9 +16,9 @@ type Config struct {
 	TimeSubtractionMs    time.Duration `mapstructure:"TIME_SUBTRACTION_MS"`
 	TimeMultiplicationMs time.Duration `mapstructure:"TIME_MULTIPLICATION_MS"`
 	TimeDivisionMs       time.Duration `mapstructure:"TIME_DIVISION_MS"`
-	HTTPListenAddr       string        `mapstructure:"HTTP_LISTEN_ADDR"` // <--- Должно быть экспортировано
-	GRPCListenAddr       string        `mapstructure:"GRPC_LISTEN_ADDR"` // <--- Должно быть экспортировано
-	JWTSecret            []byte        `mapstructure:"JWT_SECRET"`       // <--- Должно быть экспортировано
+	HTTPListenAddr       string        `mapstructure:"HTTP_LISTEN_ADDR"`
+	GRPCListenAddr       string        `mapstructure:"GRPC_LISTEN_ADDR"`
+	JWTSecret            []byte        `mapstructure:"JWT_SECRET"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -69,13 +67,6 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("JWT_SECRET is not set in configuration")
 	}
 	cfg.JWTSecret = []byte(jwtSecretString)
-
-	// Преобразуем строки длительности из Viper в time.Duration в структуре
-	// Viper.Unmarshal с `mapstructure` и `time.Duration` должен сделать это автоматически
-	// если значения в env или .env в формате time.Duration (напр. "100ms").
-	// Проверим, что значения длительности не нулевые, если это не ожидается по логике.
-	// Если getEnvDuration был нужен для парсинга чисел как мс, нужно адаптировать логику тут.
-	// Но стандартный Viper.Unmarshal умеет парсить "100ms" в time.Duration.
 
 	log.Printf("Конфигурация успешно загружена: %+v", cfg) // Логируем загруженную конфигурацию для проверки
 

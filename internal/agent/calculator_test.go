@@ -1,10 +1,10 @@
-package agent // Файл тестов находится в том же пакете 'agent'
+package agent
 
 import (
 	"fmt"
-	"math"    // Для сравнения чисел с плавающей точкой
-	"strings" // Для проверки подстроки в ошибках
-	"testing" // Стандартный пакет Go для тестов
+	"math"
+	"strings"
+	"testing"
 )
 
 // TestCalculateOperation_Valid тестирует функцию CalculateOperation для корректных операций.
@@ -95,7 +95,6 @@ func TestCalculateOperation_Invalid(t *testing.T) {
 			}
 
 			// Проверяем, что сообщение об ошибке содержит ожидаемую подстроку
-			// t.Logf("Для операции %.2f %s %.2f: Получена ошибка: %v (Ожидалась подстрока '%s')", tc.arg1, tc.operation, tc.arg2, err, tc.expectedError) // Отладочный лог
 			if !strings.Contains(err.Error(), tc.expectedError) {
 				t.Errorf("Для операции %.2f %s %.2f: Ожидалась ошибка, содержащая '%s', но получено '%v'.",
 					tc.arg1, tc.operation, tc.arg2, tc.expectedError, err)

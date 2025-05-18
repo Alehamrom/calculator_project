@@ -2,7 +2,6 @@ package handlers
 
 import (
 	localParser "calculator_project/internal/parser"
-	// "context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -245,7 +244,7 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Попытка парсинга выражения: %s", req.Expression)
 
-	// *** 3. Парсинг выражения нашим парсером и создание задач. ***
+	// 3. Парсинг выражения нашим парсером и создание задач.
 	parserState := localParser.NewParser(req.Expression)
 	rootNode, err := parserState.ParseExpression()
 	if err != nil {
@@ -281,19 +280,14 @@ func (s *APIService) CalculateHandler(w http.ResponseWriter, r *http.Request) {
 	expressionID := uuid.New().String() // Используем библиотеку uuid для генерации ID
 
 	// 5. Сохраняем выражение в базу данных.
-	// !!! ЭТОТ SQL ЗАПРОС ДОЛЖЕН ВКЛЮЧАТЬ root_task_id !!!
 	insertExpressionSQL := `INSERT INTO expressions (id, user_id, expression_string, status, root_task_id, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
 	expressionStatus := "Pending" // Начальный статус выражения.
-
-	// !!! ЭТОТ ВЫЗОВ EXEC ДОЛЖЕН ПЕРЕДАВАТЬ finalResultIDOrValue ДЛЯ колонки root_task_id !!!
 	_, err = s.DB.Exec(insertExpressionSQL, expressionID, userID, req.Expression, expressionStatus, finalResultIDOrValue)
 	if err != nil {
 		log.Printf("Ошибка при сохранении выражения в базу данных (ID: %s, UserID: %d): %v", expressionID, userID, err)
-		// В более надежной системе здесь нужно подумать о транзакциях.
 		localHTTP.RespondError(w, http.StatusInternalServerError, "Failed to save expression")
 		return
 	}
-	// Добавлен лог, чтобы увидеть, что именно сохраняется в root_task_id
 	log.Printf("Выражение сохранено в БД (ID: %s, UserID: %d, RootTaskID: %s)", expressionID, userID, finalResultIDOrValue)
 
 	// 6. Сохраняем сгенерированные задачи в базу данных, связывая их с выражением.
@@ -357,41 +351,8 @@ func (s *APIService) ListExpressionsHandler(w http.ResponseWriter, r *http.Reque
 	expressions := []localModels.Expression{} // Слайс для хранения выражений
 
 	for rows.Next() {
-		var expr localModels.Expression // Переменная для сканирования текущей строки выражения
-		// Используем sql.NullString для сканирования nullable полей (result, error_message).
-		// Твоя структура Expression имеет Result как sql.NullString - это нужно учесть при сканировании.
-		// ОШИБКА в моей Expression структуре выше, Result должен быть sql.NullFloat64!
-		// Давай исправим мою структуру Expression в models.go.
-		// Исходя из твоего models.go, Expression.FinalResult - sql.NullString. Ок, используем это.
+		var expr localModels.Expression
 
-		// Сканируем данные из строки БД в структуру Expression.
-		// Убедись, что порядок полей соответствует SELECT запросу.
-		// NOTE: Expression.FinalResult у тебя sql.NullString, а не sql.NullFloat64. Сканируем в него.
-		// В SQL у тебя колонка 'result' REAL NULL. Сканировать REAL NULL в sql.NullString - НЕПРАВИЛЬНО.
-		// Это приведет к ошибке сканирования!
-		// Expression.FinalResult ДОЛЖЕН быть sql.NullFloat64 или sql.NullString, но в базе 'result' - REAL.
-		// Если в БД 'result' REAL NULL, а в Go struct Expression.FinalResult sql.NullString,
-		// нужно или поменять тип в SQL, или поменять тип в Go struct, или сканировать в sql.NullFloat64
-		// и затем преобразовывать.
-		// Давай предположим, что в твоем models.go, Expression.FinalResult - sql.NullFloat64.
-		// ИЛИ что ты готов поменять его на sql.NullFloat64. ИЛИ что в БД 'result' на самом деле TEXT NULL.
-		// Исходя из твоего models.go, Expression.FinalResult - sql.NullString.
-		// Но в SQL схеме, которую мы делали, 'result' в expressions был REAL NULL.
-		// Это несоответствие!
-		// Для 'result' (который REAL) нужно использовать sql.NullFloat64 в Go struct.
-		// А для error_message (TEXT) - sql.NullString.
-
-		// ВАЖНО: Исходя из твоего models.go (Expression): FinalResult sql.NullString, ErrorMessage sql.NullString.
-		// В SQL схеме (expressions): result REAL NULL, error_message TEXT NULL.
-		// Это НЕПРАВИЛЬНОЕ СООТВЕТСТВИЕ ТИПОВ!
-		// REAL в SQL нужно сканировать в sql.NullFloat64 в Go.
-		// TEXT в SQL нужно сканировать в sql.NullString в Go.
-		// Тебе нужно исправить struct Expression в models.go:
-		// FinalResult sql.NullFloat64
-		// ErrorMessage sql.NullString
-
-		// ПРЕДПОЛАГАЕМ, что ты исправил Expression.FinalResult на sql.NullFloat64 в models.go:
-		// Тогда сканируем так:
 		err := rows.Scan(
 			&expr.ID,
 			&expr.UserID,
@@ -431,7 +392,6 @@ func (s *APIService) ListExpressionsHandler(w http.ResponseWriter, r *http.Reque
 // GetExpressionHandler: Обработчик HTTP-запросов на получение деталей одного выражения пользователя по ID.
 // GET /api/v1/expressions/{id}
 // Должен быть защищен AuthMiddleware.
-// TODO: Реализовать GetExpressionHandler
 type ExpressionDetailsResponse struct {
 	localModels.Expression                               // Встраиваем структуру Expression
 	Tasks                  []localModels.CalculationTask `json:"tasks"` // Список задач выражения
@@ -445,7 +405,7 @@ func (s *APIService) GetExpressionHandler(w http.ResponseWriter, r *http.Request
 
 	// 1. Получаем ID выражения из URL (из переменной пути).
 	// Используем пакет gorilla/mux для извлечения переменных пути.
-	vars := mux.Vars(r) // <--- Используем mux.Vars для получения {id}
+	vars := mux.Vars(r)
 	expressionID := vars["id"]
 
 	if expressionID == "" {
@@ -483,13 +443,13 @@ func (s *APIService) GetExpressionHandler(w http.ResponseWriter, r *http.Request
 
 	// Выполняем запрос. Используем QueryRowContext для выборки одной строки.
 	// Убедись, что в твоем models.go Expression.FinalResult - sql.NullFloat64, а ErrorMessage - sql.NullString
-	err = s.DB.QueryRowContext(r.Context(), selectExpressionSQL, expressionID, userID).Scan( // <--- Передаем оба ID в запрос
+	err = s.DB.QueryRowContext(r.Context(), selectExpressionSQL, expressionID, userID).Scan(
 		&expr.ID,
 		&expr.UserID,
 		&expr.ExpressionString,
 		&expr.Status,
-		&expr.FinalResult,  // sql.NullFloat64
-		&expr.ErrorMessage, // sql.NullString
+		&expr.FinalResult,
+		&expr.ErrorMessage,
 		&expr.CreatedAt,
 		&expr.UpdatedAt,
 	)
@@ -514,7 +474,7 @@ func (s *APIService) GetExpressionHandler(w http.ResponseWriter, r *http.Request
 	selectTasksSQL := `
 		SELECT id, expression_id, operation, arg1, arg2, status, result, error_message, created_at, updated_at
 		FROM tasks
-		WHERE expression_id = ?` // <--- Выбираем задачи по ID выражения
+		WHERE expression_id = ?`
 
 	// Выполняем запрос к базе данных для задач.
 	rows, err := s.DB.QueryContext(r.Context(), selectTasksSQL, expressionID)
@@ -540,8 +500,8 @@ func (s *APIService) GetExpressionHandler(w http.ResponseWriter, r *http.Request
 			&task.Arg1,
 			&task.Arg2,
 			&task.Status,
-			&task.Result,       // sql.NullFloat64
-			&task.ErrorMessage, // sql.NullString
+			&task.Result,
+			&task.ErrorMessage,
 			&task.CreatedAt,
 			&task.UpdatedAt,
 		)

@@ -1,8 +1,7 @@
-package auth // Объявляем пакет auth
+package auth
 
 import (
 	"context"
-	// "database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -10,13 +9,11 @@ import (
 	"strings"
 	"time"
 
-	// Локальные импорты
 	localHTTP "calculator_project/internal/http"
 	localModels "calculator_project/internal/models"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
-	// "github.com/gorilla/mux"
 )
 
 func HashPassword(password string) (string, error) {
@@ -48,29 +45,19 @@ func ContextWithUserID(ctx context.Context, userID int64) context.Context {
 // Возвращает строку с токеном или ошибку.
 func GenerateJWT(userID int64, secret []byte) (string, error) {
 	// Определяем срок действия токена, например, 24 часа с текущего момента.
-	// Убедись, что пакет "time" импортирован.
 	expirationTime := time.Now().Add(24 * time.Hour)
 
 	// Создаем claims (набор данных), которые будут закодированы в токене.
-	// Используем нашу структуру localModels.CustomClaims.
-	// Убедись, что localModels "calculator_project/internal/models" импортирован.
 	claims := &localModels.CustomClaims{
 		UserID: int64(userID), // Добавляем ID пользователя в claims
 		RegisteredClaims: jwt.RegisteredClaims{
 			// Добавляем стандартные claims, рекомендованные JWT спецификацией.
-			// Их валидирует библиотека github.com/golang-jwt/jwt/v5 автоматически.
 			ExpiresAt: jwt.NewNumericDate(expirationTime), // Время истечения срока действия
 			IssuedAt:  jwt.NewNumericDate(time.Now()),     // Время выпуска токена
-			// NotBefore: jwt.NewNumericDate(time.Now()),  // Опционально: токен недействителен до этого времени
-			// Issuer: "your_service_name",               // Опционально: издатель
-			// Subject: fmt.Sprintf("%d", userID),     // Опционально: субъект
-			// Audience: jwt.ClaimStrings{"your_audience"}, // Опционально: аудитория
-			// ID: "...", // Опционально: уникальный ID токена
 		},
 	}
 
 	// Создаем новый токен.
-	// Используем метод подписи HMAC-SHA256 (один из стандартных для JWT) и созданные claims.
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 	// Подписываем токен нашим секретным ключом.
@@ -86,18 +73,9 @@ func GenerateJWT(userID int64, secret []byte) (string, error) {
 }
 
 // ValidateJWT валидирует JWT токен и извлекает UserID из claims.
-// Принимает строку токена (string) и секретный ключ ([]byte).
-// Возвращает UserID (int) из токена и nil ошибку, если токен валиден.
-// Возвращает 0 (или другое константное значение, например -1) и ошибку, если токен недействителен
-// (неверная подпись, истек срок, некорректный формат claims и т.д.).
 func ValidateJWT(tokenString string, secret []byte) (int64, error) {
 	// Парсим токен и одновременно валидируем его.
-	// 1. tokenString - строка токена для парсинга.
-	// 2. &localModels.CustomClaims{} - пустой экземпляр нашей структуры claims, куда библиотека распакует данные из токена.
-	// 3. func(token *jwt.Token) (interface{}, error) - Keyfunc: функция, которая предоставляет секретный ключ для проверки подписи.
 	token, err := jwt.ParseWithClaims(tokenString, &localModels.CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// В Keyfunc ОБЯЗАТЕЛЬНО нужно проверить, что алгоритм подписи токена (из его заголовка)
-		// соответствует ожидаемому (например, HMAC-SHA256). Это защита от атак.
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			// Если метод подписи не HMAC, возвращаем ошибку.
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
@@ -172,14 +150,6 @@ func AuthMiddleware(jwtSecret []byte) func(next http.Handler) http.Handler {
 			if err != nil {
 				// Если парсинг или валидация токена не удались, возвращаем 401.
 				log.Printf("AuthMiddleware: Ошибка валидации токена: %v", err)
-
-				// Временно отключил этот блок
-				// if ve, ok := err.(*jwt.ValidationError); ok {
-				// 	if ve.Errors&jwt.ValidationErrorExpired != 0 {
-				// 		localHTTP.RespondError(w, http.StatusUnauthorized, "Token is expired") // Токен истек
-				// 		return
-				// 	}
-				// }
 
 				localHTTP.RespondError(w, http.StatusUnauthorized, "Invalid token") // Любая ошибка валидации
 				return
