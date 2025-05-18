@@ -54,27 +54,6 @@
 3.  **Оркестратор** работает с базой данных **SQLite** для хранения пользователей, выражений и задач.
 
 
-### Схема работы
-
-```mermaid
-graph TD
-    subgraph "Внешний Клиент"
-        User[Пользователь]
-    end
-
-    subgraph "Сервис Оркестратора"
-        Orchestrator["Оркестратор<br/>(HTTP & gRPC Server)"]
-        Database[(База данных<br/>SQLite)]
-    end
-
-    subgraph "Сервис(ы) Агента"
-        Agent["Агент<br/>(gRPC Client)"]
-    end
-
-    User -- HTTP API<br/>(Порт 8080) --> Orchestrator
-    Orchestrator -- Управление данными --> Database
-    Orchestrator -- gRPC Поток<br/>(Задачи/Результаты<br/>Порт 50051) <--> Agent
-
 ## Установка и Настройка
 
 Для запуска проекта необходимо выполнить следующие шаги:
