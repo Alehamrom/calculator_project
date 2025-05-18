@@ -66,12 +66,6 @@
     git clone https://github.com/Alehamrom/calculator_project
     ```
 
-    Перейдите в директорию проекта:
-
-    ```bash
-    cd calculator_project
-    ```
-
 2.  **Загрузка зависимостей:**
 
     Загрузите необходимые Go модули:
