@@ -7,7 +7,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o orchestrator ./cmd/orchestrator
+RUN CGO_ENABLED=0 go build -o orchestrator ./cmd/calc_service
 
 FROM scratch
 

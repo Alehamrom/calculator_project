@@ -18,7 +18,7 @@ type Config struct {
 	TimeDivisionMs       time.Duration `mapstructure:"TIME_DIVISION_MS"`
 	HTTPListenAddr       string        `mapstructure:"HTTP_LISTEN_ADDR"`
 	GRPCListenAddr       string        `mapstructure:"GRPC_LISTEN_ADDR"`
-	JWTSecret            []byte        `mapstructure:"JWT_SECRET"`
+	JWTSecret            []byte        `mapstructure:"-"` // Игнорируем в viper, парсим отдельно
 }
 
 func LoadConfig() (*Config, error) {
